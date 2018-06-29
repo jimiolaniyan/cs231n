@@ -126,8 +126,8 @@ class TwoLayerNet(object):
 
         grad_h1_relu = p.dot(W2.T)
         grad_h1_relu += int_zer.dot(W2.T)
-        grad_h1 = grad_h1_relu.copy()
-        grad_h1[h1 < 0] = 0
+        grad_h1 = grad_h1_relu.copy() # dx = dout.copy()
+        grad_h1[h1 < 0] = 0           # dx[x<0] = 0
         grad_W1 += X.T.dot(grad_h1)
 
         grad_W2 += h1_relu.T.dot(p)
