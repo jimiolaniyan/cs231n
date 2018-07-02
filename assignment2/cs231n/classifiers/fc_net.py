@@ -190,11 +190,18 @@ class FullyConnectedNet(object):
         for index, value in enumerate(layer_params):
             if index == len(layer_params) - 1:
                 continue
-            W_key = "W{}".format(index + 1)
-            b_key = "b{}".format(index + 1)
+            j = index + 1
+            W_key = "W{}".format(j)
+            b_key = "b{}".format(j)
 
-            self.params[W_key] = weight_scale * np.random.randn(value, layer_params[index + 1])
-            self.params[b_key] = np.zeros(layer_params[index + 1])
+            self.params[W_key] = weight_scale * np.random.randn(value, layer_params[j])
+            self.params[b_key] = np.zeros(layer_params[j])
+
+            if self.use_batchnorm and index != len(layer_params) - 2:
+                gamma_key = "gamma{}".format(j)
+                beta_key = "beta{}".format(j)
+                self.params[gamma_key] = np.ones(layer_params[j])
+                self.params[beta_key] = np.zeros(layer_params[j])
 
         # for key, val in self.params.items():
         #     print(key, val.shape)
@@ -256,19 +263,33 @@ class FullyConnectedNet(object):
         ############################################################################
         score = None
         caches = {}
+
         for i in range(self.num_layers):
             j = i + 1
             W_key = "W{}".format(j)
             b_key = "b{}".format(j)
             cache_key = 'cache_{}'.format(j)
+            drpout_cache_key = 'drpout_cache_{}'.format(j)
 
+            W, b = self.params[W_key], self.params[b_key]
             if i == self.num_layers - 1:
-                scores, cache_last = affine_forward(score, self.params[W_key], self.params[b_key])
+                scores, cache_last = affine_forward(score, W, b)
                 caches[cache_key] = cache_last
             else:
                 x_term = X if i == 0 else score
-                score, cache_int = affine_relu_forward(x_term, self.params[W_key], self.params[b_key])
+                if self.use_batchnorm:
+                    gamma_key = 'gamma{}'.format(j)
+                    beta_key = 'beta{}'.format(j)
+                    gamma, beta = self.params[gamma_key], self.params[beta_key]
+                    score, cache_int = FullyConnectedNet.affine_batchnorm_relu_forward(self, x_term, W, b, gamma, beta, self.bn_params[i])
+                else:
+                    score, cache_int = affine_relu_forward(x_term, W, b)
+
                 caches[cache_key] = cache_int
+
+                if self.use_dropout:
+                    score, cache_drop = dropout_forward(score, self.dropout_param)
+                    caches[drpout_cache_key] = cache_drop
 
         # l1_scores, l1_cache = affine_relu_forward(X, W1, b1)
         # scores, l2_cache = affine_forward(l1_scores, W2, b2)
@@ -304,7 +325,9 @@ class FullyConnectedNet(object):
 
             W_key = "W{}".format(i)
             b_key = "b{}".format(i)
+
             cache_key = 'cache_{}'.format(i)
+            drpout_cache_key = 'drpout_cache_{}'.format(i)
 
             W = self.params[W_key]
             loss += 0.5 * self.reg * np.sum(W * W)
@@ -313,7 +336,16 @@ class FullyConnectedNet(object):
             if i == self.num_layers:
                 dscores, dW, db = affine_backward(soft_grad, caches[cache_key])
             else:
-                dscores, dW, db = affine_relu_backward(dscores, caches[cache_key])
+                if self.use_dropout:
+                    dscores = dropout_backward(dscores, caches[drpout_cache_key])
+                if self.use_batchnorm:
+                    dscores, dW, db, dgamma, dbeta = FullyConnectedNet.affine_batchnorm_relu_backward(self, dscores, caches[cache_key])
+                    gamma_key = 'gamma{}'.format(i)
+                    beta_key = 'beta{}'.format(i)
+                    grads[gamma_key] = dgamma
+                    grads[beta_key] = dbeta
+                else:
+                    dscores, dW, db = affine_relu_backward(dscores, caches[cache_key])
 
             dW += self.reg * W
             grads[W_key] = dW
@@ -323,3 +355,17 @@ class FullyConnectedNet(object):
         ############################################################################
 
         return loss, grads
+
+    def affine_batchnorm_relu_forward(self, x, w, b, gamma, beta, bn_param):
+        a, fc_cache = affine_forward(x, w, b)
+        bn_out, bn_cache = batchnorm_forward(a, gamma, beta, bn_param)
+        out, relu_cache = relu_forward(bn_out)
+        cache = (fc_cache, bn_cache, relu_cache)
+        return out, cache
+
+    def affine_batchnorm_relu_backward(self, dout, cache):
+        fc_cache, bn_cache, relu_cache = cache
+        da = relu_backward(dout, relu_cache)
+        dx_, dgamma, dbeta = batchnorm_backward(da, bn_cache)
+        dx, dw, db = affine_backward(dx_, fc_cache)
+        return dx, dw, db, dgamma, dbeta
